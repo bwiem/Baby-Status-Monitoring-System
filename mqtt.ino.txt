@@ -1,0 +1,126 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// WiFi credentials
+#define WIFI_SSID "Galaxy A129060"       // Replace with your WiFi SSID
+#define WIFI_PASSWORD "ohtha242"         // Replace with your WiFi password
+
+// HiveMQ Cloud MQTT Broker details
+#define MQTT_HOST "d17e9cd6c43744c9acfdd3d9d2f3ede8.s1.eu.hivemq.cloud" // Replace with your HiveMQ Cloud hostname
+#define MQTT_PORT 1883                           // Secure MQTT port
+#define MQTT_USER "wiem.bejaoui@favizone.com"               // Replace with your HiveMQ username
+#define MQTT_PASS "Ohtha242"               // Replace with your HiveMQ password
+#define MQTT_TOPIC "babyStatus"                 // MQTT topic for publishing
+
+WiFiClient wifiClient;   // Use WiFiClient for secure connections (TLS)
+PubSubClient mqttClient(wifiClient);
+
+// Define hardware pins
+#define POT_PIN 34    // GPIO 34 for Potentiometer output
+#define GREEN_LED 18  // GPIO 18 for Green LED (baby is sleeping)
+#define YELLOW_LED 19 // GPIO 19 for Yellow LED (baby is awake)
+#define RED_LED 23    // GPIO 23 for Red LED (baby is crying)
+
+// Initialize the LCD: I2C address 0x27, 16 columns, 2 rows
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+void connectToWiFi() {
+  Serial.print("Connecting to WiFi");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  lcd.setCursor(0, 0);
+  lcd.print("Connecting WiFi...");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected!");
+  lcd.clear();
+  lcd.print("WiFi Connected!");
+}
+
+void connectToMQTT() {
+  while (!mqttClient.connected()) {
+    Serial.print("Connecting to MQTT...");
+    lcd.setCursor(0, 0);
+    lcd.print("Connecting MQTT...");
+    if (mqttClient.connect("ESP32_BabyStatus", MQTT_USER, MQTT_PASS)) {  // Client ID and credentials
+      Serial.println("connected");
+      lcd.clear();
+      lcd.print("MQTT Connected!");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" retrying in 5 seconds");
+      delay(5000);
+    }
+  }
+}
+
+void setup() {
+  // Initialize Serial Monitor
+  Serial.begin(115200);
+
+  // Configure GPIO pins
+  pinMode(GREEN_LED, OUTPUT);
+  pinMode(YELLOW_LED, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
+
+  // Initialize the LCD
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Initializing...");
+
+  // Connect to WiFi
+  connectToWiFi();
+
+  // Setup MQTT client
+  // Use HiveMQ's default certificate
+  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+  connectToMQTT();
+}
+
+void loop() {
+  if (!mqttClient.connected()) {
+    connectToMQTT();
+  }
+  mqttClient.loop();
+
+  int potValue = analogRead(POT_PIN);  // Read potentiometer value
+  String status;
+
+  // Determine baby's status
+  if (potValue <= 400) { // Baby is sleeping
+    digitalWrite(GREEN_LED, HIGH);
+    digitalWrite(YELLOW_LED, LOW);
+    digitalWrite(RED_LED, LOW);
+    lcd.clear();
+    lcd.print("Baby is sleeping");
+    status = "sleeping";
+  } else if (potValue > 400 && potValue <= 2500) { // Baby is awake
+    digitalWrite(GREEN_LED, LOW);
+    digitalWrite(YELLOW_LED, HIGH);
+    digitalWrite(RED_LED, LOW);
+    lcd.clear();
+    lcd.print("Baby is awake");
+    status = "awake";
+  } else { // Baby is crying
+    digitalWrite(GREEN_LED, LOW);
+    digitalWrite(YELLOW_LED, LOW);
+    digitalWrite(RED_LED, HIGH);
+    lcd.clear();
+    lcd.print("Baby is crying");
+    status = "crying";
+  }
+
+  // Publish status to MQTT
+  if (mqttClient.publish(MQTT_TOPIC, status.c_str())) {
+    Serial.println("Status published: " + status);
+  } else {
+    Serial.println("Failed to publish status");
+  }
+
+  delay(15000); // Send status every 15 seconds
+}
